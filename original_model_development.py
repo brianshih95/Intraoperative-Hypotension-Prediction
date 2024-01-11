@@ -29,13 +29,16 @@ from random import randint
 
 warnings.filterwarnings("ignore")
 
+i = 0
+fig, ax = plt.subplots()
 colors = ['red', 'orange', 'blue', 'cyan']
+# torch.autograd.set_detect_anomaly(True)
 # Prespecifications
 lr = 0.0001
-task = 'regression'  # either 'classification' or 'regression'
-pred_lag = 900  # 300 for 5-min, 600 for 10-min, 900 for 15-min prediction or others
+task = 'classification'  # either 'classification' or 'regression'
+pred_lag = 300  # 300 for 5-min, 600 for 10-min, 900 for 15-min prediction or others
 batch_size = 128
-max_epoch = 50
+max_epoch = 2
 
 cuda_number = 0  # -1 for multi GPU support
 num_workers = 0
@@ -179,7 +182,9 @@ class Net(nn.Module):
         self.activation = nn.Sigmoid()
 
     def forward(self, x):
+
         x = x.view(x.shape[0], self.inc, -1)
+
         out = self.conv1(x)
         out = self.conv2(out)
         out = self.conv3(out)
@@ -187,22 +192,24 @@ class Net(nn.Module):
         out = self.conv5(out)
         out = self.conv6(out)
         out = self.conv7(out)
-        out = out.view(x.shape[0], out.size(1) * out.size(2))
-        out = self.fc(out)
 
+        out = out.view(x.shape[0], out.size(1) * out.size(2))
+
+        out = self.fc(out)
         if self.task == 'classification':
             out = self.activation(out)
         return out
 
 
 # Read dataset
-processed_dir = './processed/'
+# processed_dir = './processed/'
+processed_dir = './test/'
+# processed_dir = './bad/'
 
 file_list = np.char.split(np.array(os.listdir(processed_dir)), '.')
 case_list = []
 for caseid in file_list:
-    if (caseid[0].find('(') == -1):
-        case_list.append(int(caseid[0]))
+    case_list.append(int(caseid[0]))
 print('N of total cases: {}'.format(len(case_list)))
 
 cases = {}
@@ -222,17 +229,15 @@ for idx, caseid in enumerate(case_list):
     filename = processed_dir + str(caseid) + '.pkl'
     with open(filename, 'rb') as handle:
         data = pickle.load(handle)
-
-        # bug
-        for i in range(len(data['ple'])):
-            data['ple'][i][np.isnan(data['ple'][i])] = 0
-
         data['caseid'] = [caseid] * len(data['abp'])
         raw_records = raw_records.append(pd.DataFrame(
             data)) if idx > 0 else pd.DataFrame(data)
 
 raw_records = raw_records[(raw_records['map'] >= 20) & (
     raw_records['map'] <= 160)].reset_index(drop=True)  # Exclude abnormal range
+
+
+# Define loader and model
 
 if task == 'classification':
     task_target = 'hypo'
@@ -257,10 +262,9 @@ for phase in ['train', 'valid', 'test']:
         cases[phase])].reset_index(drop=True)
     print('- N of {} records: {}'.format(phase, len(split_records[phase])))
 
-c = 0
-fig, ax = plt.subplots()
-for invasive in [True, False]:
-    for multi in [False, True]:
+
+for invasive in [False]:
+    for multi in [True]:
         print('\n\nInvasive: {}\nMulti: {}\nPred lag: {}\n'.format(
             invasive, multi, pred_lag))
         ext = {}
@@ -287,9 +291,10 @@ for invasive in [True, False]:
 
         # Model development and validation
 
-        torch.cuda.set_device(cuda_number)
+        # torch.cuda.set_device(cuda_number)
         DNN = Net(task=task, invasive=invasive, multi=multi)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = "cpu"
         DNN = DNN.to(device)
 
         optimizer = torch.optim.Adam(DNN.parameters(), lr=lr)
@@ -307,11 +312,6 @@ for invasive in [True, False]:
 
             DNN.train()
             for dnn_inputs, dnn_target in loader['train']:
-
-                # bug
-                for i in range(len(dnn_inputs)):
-                    dnn_inputs[i] = torch.nan_to_num(dnn_inputs[i], nan=0.0)
-
                 dnn_inputs, dnn_target = dnn_inputs.to(
                     device), dnn_target.to(device)
                 optimizer.zero_grad()
@@ -329,16 +329,9 @@ for invasive in [True, False]:
                 DNN.eval()
                 with torch.no_grad():
                     for dnn_inputs, dnn_target in loader[phase]:
-
-                        # bug
-                        for i in range(len(dnn_inputs)):
-                            dnn_inputs[i] = torch.nan_to_num(
-                                dnn_inputs[i], nan=0.0)
-
                         dnn_inputs, dnn_target = dnn_inputs.to(
                             device), dnn_target.to(device)
                         dnn_output = DNN(dnn_inputs)
-
                         target_stack[phase].extend(np.array(dnn_target.cpu()))
                         output_stack[phase].extend(
                             np.array(dnn_output.cpu().T[0]))
@@ -415,20 +408,13 @@ for invasive in [True, False]:
 
             with torch.no_grad():
                 for dnn_inputs, dnn_target in loader['test']:
-
-                    # bug
-                    for i in range(len(dnn_inputs)):
-                        dnn_inputs[i] = torch.nan_to_num(
-                            dnn_inputs[i], nan=0.0)
-
                     dnn_inputs = dnn_inputs.to(device)
                     dnn_output = DNN(dnn_inputs)
-
                     y_scores.extend(np.array(dnn_output.cpu().T[0]))
             # Calculate sensitivity and specificity
             fpr, tpr, thresholds = roc_curve(y_true, y_scores)
             roc_auc = auc(fpr, tpr)
-            plt.plot(fpr, tpr, color=colors[c],
+            plt.plot(fpr, tpr, color=colors[i],
                      label='AUC: {:.3f}'.format(roc_auc))
         else:
             y_true = np.array(ext['test']['map'])
@@ -436,24 +422,16 @@ for invasive in [True, False]:
 
             with torch.no_grad():
                 for dnn_inputs, dnn_target in loader['test']:
-
-                    # bug
-                    for i in range(len(dnn_inputs)):
-                        dnn_inputs[i] = torch.nan_to_num(
-                            dnn_inputs[i], nan=0.0)
-
                     dnn_inputs = dnn_inputs.to(device)
                     dnn_output = DNN(dnn_inputs)
-
                     y_pred.extend(np.array(dnn_output.cpu().T[0]))
-
             errors = y_true - y_pred
             mae = np.mean(errors)
-            ax.boxplot(errors, positions=[c], patch_artist=True, showfliers=False,
+            ax.boxplot(errors, positions=[i], patch_artist=True, showfliers=False,
                        boxprops=dict(facecolor='white', edgecolor='black'),
                        widths=0.5,
-                       medianprops=dict(color=colors[c]))
-        c += 1
+                       medianprops=dict(color=colors[i]))
+        i += 1
 
 if task == "classification":
     plt.plot([0, 1], [0, 1], color='gray', linestyle='dotted')
