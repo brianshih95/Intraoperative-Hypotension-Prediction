@@ -5,12 +5,10 @@
 # Author: Solam Lee, MD (solam@yonsei.ac.kr)
 
 # Imports
-
 import os
 import pickle
 import numpy as np
 import pandas as pd
-import requests
 from scipy.signal import find_peaks
 
 # Prespecifications
@@ -35,7 +33,6 @@ for caseid in ids:
     source_end = 0
 
     # Read time-synchronized raw data
-
     if os.path.exists( converted_path ) == True:
         with open( converted_path, 'rb') as handle:
             data = pickle.load(handle)
@@ -50,12 +47,10 @@ for caseid in ids:
                                     [ 'Primus/CO2', 'co2' ] ]:
             source[track] = np.array ( data[full_name] )
             source_end = max ( source_end, source[track].shape[0] )
-            
 
     valid = {}
 
     # Parameters for peak detection
-
     peak_height = { 'abp':30, 'ecg':-999, 'ple': 10, 'co2':20 }
     peak_prominence = { 'abp':20, 'ecg':0.2, 'ple': 10, 'co2':20 }
     peak_distance = { 'abp':0.5, 'ecg':0.5, 'ple': 0.5, 'co2':1 }
@@ -91,7 +86,6 @@ for caseid in ids:
         continue
     
     for i in range ( n_peaks-1 ):
-
         peak_map[i] = np.mean ( source['abp'][peaks['abp'][i]:peaks['abp'][i+1]])
         if peak_map[i] < 20 or peak_map[i] > 200: # Exclude rhythms with abnormal arterial pressure
             valid['abp'][ peaks['abp'][i] : next_peaks['abp'][i] ] = 0
