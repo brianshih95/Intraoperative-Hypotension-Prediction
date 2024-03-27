@@ -1,3 +1,4 @@
+# best 3/27
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -84,28 +85,46 @@ class TransformerModel(nn.Module):
         else:
             self.inc = 1
 
-        self.d_model = self.inc * 200
+        self.maxpool = nn.MaxPool1d(2, stride=2)
+        self.d_model = self.inc
+        self.linear1 = nn.Linear(self.d_model, 32)
+        self.linear2 = nn.Linear(32, 128)
+        self.linear3 = nn.Linear(128, 512)
         self.encoder_layer = nn.TransformerEncoderLayer(
-            d_model=self.d_model, nhead=num_heads, dim_feedforward=dim_feedforward, batch_first=batch_first)
+            d_model=512, nhead=num_heads, dim_feedforward=dim_feedforward, batch_first=batch_first)
         self.transformer_encoder = nn.TransformerEncoder(
             self.encoder_layer, num_layers=num_layers)
-        self.fc = nn.Linear(self.d_model, hidden_dim)
-        self.output_layer = nn.Linear(hidden_dim, self.final)
+        self.linear4 = nn.Linear(512, 64)
+        self.linear5 = nn.Linear(64, 32)
+        self.linear6 = nn.Linear(32, 16)
+        self.fc = nn.Linear(736, self.final)
+        self.activation = nn.Sigmoid()
 
     def forward(self, x):
         x = x.view(x.shape[0], -1, self.d_model)
-        # print(x.shape, '1')
-        x = self.transformer_encoder(x)
-        # print(x.shape, '2')
-        x = self.fc(x)
+        x = self.linear1(x)
         x = torch.relu(x)
-        # print(x.shape, '3')
-        x = self.output_layer(x)
-        x = torch.mean(x, dim=1, keepdim=True)
+        x = torch.permute(self.maxpool(torch.permute(x, (0, 2, 1))), (0, 2, 1))
+        x = self.linear2(x)
+        x = torch.relu(x)
+        x = torch.permute(self.maxpool(torch.permute(x, (0, 2, 1))), (0, 2, 1))
+        x = self.linear3(x)
+        x = torch.relu(x)
+        x = torch.permute(self.maxpool(torch.permute(x, (0, 2, 1))), (0, 2, 1))
+        x = self.transformer_encoder(x)
+        x = self.linear4(x)
+        x = torch.relu(x)
+        x = torch.permute(self.maxpool(torch.permute(x, (0, 2, 1))), (0, 2, 1))
+        x = self.linear5(x)
+        x = torch.relu(x)
+        x = torch.permute(self.maxpool(torch.permute(x, (0, 2, 1))), (0, 2, 1))
+        x = self.linear6(x)
+        x = torch.relu(x)
+        x = torch.permute(self.maxpool(torch.permute(x, (0, 2, 1))), (0, 2, 1))
         x = x.view(x.shape[0], x.size(1) * x.size(2))
+        x = self.fc(x)
         if self.task == 'classification':
-          x = torch.sigmoid(x)
-        # print(x.shape, '4')
+            x = self.activation(x)
         return x
 
 
@@ -149,7 +168,7 @@ raw_records = raw_records[(raw_records['map'] >= 20) & (
 
 if task == 'classification':
     task_target = 'hypo'
-    criterion = nn.BCEWithLogitsLoss()
+    criterion = nn.BCELoss()
 else:
     task_target = 'map'
     criterion = nn.MSELoss()
@@ -199,7 +218,7 @@ for invasive in [True, False]:
             epoch_loss[phase], epoch_auc[phase] = [], []
 
         model = TransformerModel(task, invasive, multi, hidden_dim=512,
-                                 num_layers=4, num_heads=20, dim_feedforward=512, batch_first=True)
+                                 num_layers=4, num_heads=4, dim_feedforward=1024, batch_first=True)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model = model.to(device)
 
