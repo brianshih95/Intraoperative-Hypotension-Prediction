@@ -1,4 +1,3 @@
-# best 3/27
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -13,14 +12,15 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, accuracy_score, roc_auc_score, roc_curve, auc
 from sklearn.linear_model import LogisticRegression
 from random import randint
+import math
 
 warnings.filterwarnings("ignore")
 
 colors = ['red', 'orange', 'blue', 'cyan']
-lr = 1e-5
+lr = 5e-5
 task = 'classification'
 pred_lag = 300
-batch_size = 64
+batch_size = 128
 max_epoch = 20
 
 num_workers = 2
@@ -28,6 +28,8 @@ num_workers = 2
 train_ratio = 0.6
 valid_ratio = 0.1
 test_ratio = 0.3
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 random_key = randint(0, 100000)
 
@@ -66,6 +68,22 @@ class dnn_dataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.target)
 
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=3000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=0.1)
+
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, d_model)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:, :x.size(1)]
+        return self.dropout(x)
 
 class TransformerModel(nn.Module):
     def __init__(self, task, invasive, multi, hidden_dim, num_layers, num_heads, dim_feedforward, batch_first):
@@ -87,17 +105,25 @@ class TransformerModel(nn.Module):
 
         self.maxpool = nn.MaxPool1d(2, stride=2)
         self.d_model = self.inc
-        self.linear1 = nn.Linear(self.d_model, 32)
-        self.linear2 = nn.Linear(32, 128)
-        self.linear3 = nn.Linear(128, 512)
+        self.linear1 = nn.Linear(self.d_model, 64)
+        self.linear2 = nn.Linear(64, 256)
+        self.linear3 = nn.Linear(256, 512)
+
+        embedding_dim = hidden_dim
+        self.pos_encoder = PositionalEncoding(embedding_dim)
         self.encoder_layer = nn.TransformerEncoderLayer(
-            d_model=512, nhead=num_heads, dim_feedforward=dim_feedforward, batch_first=batch_first)
+            d_model=embedding_dim, nhead=num_heads, dim_feedforward=dim_feedforward, batch_first=batch_first)
         self.transformer_encoder = nn.TransformerEncoder(
             self.encoder_layer, num_layers=num_layers)
-        self.linear4 = nn.Linear(512, 64)
-        self.linear5 = nn.Linear(64, 32)
-        self.linear6 = nn.Linear(32, 16)
-        self.fc = nn.Linear(736, self.final)
+        self.decoder_layer = nn.TransformerDecoderLayer(
+            d_model=embedding_dim, nhead=num_heads, dim_feedforward=dim_feedforward, batch_first=batch_first)
+        self.transformer_decoder = nn.TransformerDecoder(
+            self.decoder_layer, num_layers=num_layers)
+
+        self.linear4 = nn.Linear(512, 256)
+        self.linear5 = nn.Linear(256, 64)
+        self.linear6 = nn.Linear(64, 16)
+        self.fc = nn.Linear(480, self.final)
         self.activation = nn.Sigmoid()
 
     def forward(self, x):
@@ -111,16 +137,21 @@ class TransformerModel(nn.Module):
         x = self.linear3(x)
         x = torch.relu(x)
         x = torch.permute(self.maxpool(torch.permute(x, (0, 2, 1))), (0, 2, 1))
+
+        x = self.pos_encoder(x)
         x = self.transformer_encoder(x)
+
+        target = torch.rand(batch_size, 30, 512).to(device)
+        x = self.pos_encoder(x)
+        x = self.transformer_decoder(target, x)
+
         x = self.linear4(x)
         x = torch.relu(x)
-        x = torch.permute(self.maxpool(torch.permute(x, (0, 2, 1))), (0, 2, 1))
         x = self.linear5(x)
         x = torch.relu(x)
-        x = torch.permute(self.maxpool(torch.permute(x, (0, 2, 1))), (0, 2, 1))
         x = self.linear6(x)
         x = torch.relu(x)
-        x = torch.permute(self.maxpool(torch.permute(x, (0, 2, 1))), (0, 2, 1))
+
         x = x.view(x.shape[0], x.size(1) * x.size(2))
         x = self.fc(x)
         if self.task == 'classification':
@@ -138,12 +169,8 @@ for caseid in file_list:
 print('N of total cases: {}'.format(len(case_list)))
 
 cases = {}
-cases['train'], cases['valid+test'] = train_test_split(case_list,
-                                                       test_size=(
-                                                           valid_ratio+test_ratio),
-                                                       random_state=random_key)
-cases['valid'], cases['test'] = train_test_split(cases['valid+test'],
-                                                 test_size=(
+cases['train'], cases['valid+test'] = train_test_split(case_list, test_size=(valid_ratio+test_ratio), random_state=random_key)
+cases['valid'], cases['test'] = train_test_split(cases['valid+test'], test_size=(
     test_ratio/(valid_ratio+test_ratio)),
     random_state=random_key)
 
@@ -214,12 +241,12 @@ for invasive in [True, False]:
             loader[phase] = torch.utils.data.DataLoader(dataset[phase],
                                                         batch_size=batch_size,
                                                         num_workers=num_workers,
-                                                        shuffle=True if phase == 'train' else False)
+                                                        shuffle=True if phase == 'train' else False,
+                                                        drop_last=True)
             epoch_loss[phase], epoch_auc[phase] = [], []
 
         model = TransformerModel(task, invasive, multi, hidden_dim=512,
                                  num_layers=4, num_heads=4, dim_feedforward=1024, batch_first=True)
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model = model.to(device)
 
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -268,7 +295,6 @@ for invasive in [True, False]:
                         dnn_inputs, dnn_target = dnn_inputs.to(
                             device), dnn_target.to(device)
                         dnn_output = model(dnn_inputs)
-
                         target_stack[phase].extend(np.array(dnn_target.cpu()))
                         output_stack[phase].extend(
                             np.array(dnn_output.cpu().T[0]))
@@ -320,8 +346,8 @@ for invasive in [True, False]:
                 torch.save(model.state_dict(), pt_dir +
                            filename+'_epoch_best.pt')
 
-            torch.save(model.state_dict(), pt_dir+filename +
-                       '_epoch_{0:03d}.pt'.format(epoch+1))
+            # torch.save(model.state_dict(), pt_dir+filename +
+            #            '_epoch_{0:03d}.pt'.format(epoch+1))
 
             print('Epoch [{:3d}] Train loss: {:.4f} / Valid loss: {:.4f} (AUC: {:.4f}) / Test loss: {:.4f} (AUC: {:.4f}) {}'.format
                   (epoch+1,
@@ -349,6 +375,7 @@ for invasive in [True, False]:
                     dnn_output = model(dnn_inputs)
 
                     y_scores.extend(np.array(dnn_output.cpu().T[0]))
+            y_true = y_true[:len(y_scores)]
             fpr, tpr, thresholds = roc_curve(y_true, y_scores)
             roc_auc = auc(fpr, tpr)
             plt.plot(fpr, tpr, color=colors[c],
@@ -369,7 +396,7 @@ for invasive in [True, False]:
                     dnn_output = model(dnn_inputs)
 
                     y_pred.extend(np.array(dnn_output.cpu().T[0]))
-
+            y_true = y_true[:len(y_pred)]
             errors = y_true - y_pred
             mae = np.mean(errors)
             ax.boxplot(errors, positions=[c], patch_artist=True, showfliers=False,
