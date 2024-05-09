@@ -16,7 +16,7 @@ import math
 
 warnings.filterwarnings("ignore")
 
-colors = ['red', 'orange', 'blue', 'cyan']
+colors = ['blue', 'cyan', 'red', 'orange']
 lr = 5e-5
 task = 'classification'
 pred_lag = 300
@@ -218,7 +218,7 @@ for phase in ['train', 'valid', 'test']:
 c = 0
 fig, ax = plt.subplots()
 
-for invasive in [True, False]:
+for invasive in [False, True]:
     for multi in [False, True]:
         print('\n\nInvasive: {}\nMulti: {}\nPred lag: {}\n'.format(
             invasive, multi, pred_lag))
@@ -398,7 +398,9 @@ for invasive in [True, False]:
                     y_pred.extend(np.array(dnn_output.cpu().T[0]))
             y_true = y_true[:len(y_pred)]
             errors = y_true - y_pred
-            mae = np.mean(errors)
+            abs_errors = abs(y_true - y_pred)
+            mae = np.mean(abs_errors)
+            print('mae:', mae)
             ax.boxplot(errors, positions=[c], patch_artist=True, showfliers=False,
                        boxprops=dict(facecolor='white', edgecolor='black'),
                        widths=0.5,

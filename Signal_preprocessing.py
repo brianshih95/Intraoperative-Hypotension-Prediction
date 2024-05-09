@@ -15,13 +15,13 @@ from scipy.signal import find_peaks
 ids = []
 sampling_rate = 100 # Resampling (Hz)
 input_length = [ 30 ] # Input data length (sec)
-pred_lag = [ 300, 600, 900 ] # Prediction lag for 300, 600, and 900 sec (5-, 10-, 15-min prediction) 
+pred_lag = [ 1200, 1500, 1800 ] # Prediction lag for 300, 600, and 900 sec (5-, 10-, 15-min prediction) 
 pred_threshold = { 'hypo': lambda x: x < 65, # Threshold for hypotension (mmHg)
                    'normo': lambda x: x >= 65 }
 pred_min_length = { 'hypo': 60, # Minimum duration (sec) for defining hypotensive event
                     'normo': 1200 } # for non-hypotensive event (normal)
 convert_dir = './converted/' # Input path
-processed_dir = './processed/' # Output path
+processed_dir = './processed2/' # Output path
 
 if not (os.path.isdir(processed_dir)):
     os.makedirs(os.path.join(processed_dir))
