@@ -17,10 +17,10 @@ warnings.filterwarnings("ignore")
 
 colors = ['blue', 'cyan', 'red', 'orange']
 lr = 5e-5
-task = 'classification'
+task = 'regression'
 pred_lag = 1200
 batch_size = 128
-max_epoch = 30
+max_epoch = 15
 
 num_workers = 2
 
@@ -117,14 +117,18 @@ class TransformerModel(nn.Module):
             d_model=embedding_dim, nhead=num_heads, dim_feedforward=dim_feedforward, batch_first=batch_first)
         self.transformer_encoder = nn.TransformerEncoder(
             self.encoder_layer, num_layers=num_layers)
+        self.decoder_layer = nn.TransformerDecoderLayer(
+            d_model=embedding_dim, nhead=num_heads, dim_feedforward=dim_feedforward, batch_first=batch_first)
+        self.transformer_decoder = nn.TransformerDecoder(
+            self.decoder_layer, num_layers=num_layers)
 
         self.linear4 = nn.Linear(512, 256)
         self.linear5 = nn.Linear(256, 64)
-        self.linear6 = nn.Linear(64, 4)
-        self.fc = nn.Linear(184, self.final)
+        self.linear6 = nn.Linear(64, 16)
+        self.fc = nn.Linear(480, self.final)
         self.activation = nn.Sigmoid()
 
-    def forward(self, x):
+    def forward(self, x, target):
         x = x.view(x.shape[0], -1, self.d_model)
         x = self.linear1(x)
         x = torch.relu(x)
@@ -139,15 +143,22 @@ class TransformerModel(nn.Module):
         x = self.pos_encoder(x)
         x = self.transformer_encoder(x)
 
+        target = target.unsqueeze(1).repeat(1, 30*512)
+        target = target.view(target.shape[0], -1, 512)
+
+        # target = torch.rand(batchsize, 30, 512).to(device)
+        # target = target.unsqueeze(1).repeat(
+        #     30, 1, 512).float()._permute(1, 0, 2)
+        # x = self.pos_encoder(x)
+        target = self.pos_encoder(target)
+        x = self.transformer_decoder(target, x)
+
         x = self.linear4(x)
         x = torch.relu(x)
-        x = torch.permute(self.maxpool(torch.permute(x, (0, 2, 1))), (0, 2, 1))
         x = self.linear5(x)
         x = torch.relu(x)
-        x = torch.permute(self.maxpool(torch.permute(x, (0, 2, 1))), (0, 2, 1))
         x = self.linear6(x)
         x = torch.relu(x)
-        x = torch.permute(self.maxpool(torch.permute(x, (0, 2, 1))), (0, 2, 1))
 
         x = x.view(x.shape[0], x.size(1) * x.size(2))
         x = self.fc(x)
@@ -270,7 +281,7 @@ for invasive in [False, True]:
                 dnn_inputs, dnn_target = dnn_inputs.to(
                     device), dnn_target.to(device)
                 optimizer.zero_grad()
-                dnn_output = model(dnn_inputs)
+                dnn_output = model(dnn_inputs, dnn_target)
                 loss = criterion(dnn_output[:, 0], dnn_target)
                 current_loss['train'] += loss.item()*dnn_inputs.size(0)
                 loss.backward()
@@ -292,7 +303,7 @@ for invasive in [False, True]:
 
                         dnn_inputs, dnn_target = dnn_inputs.to(
                             device), dnn_target.to(device)
-                        dnn_output = model(dnn_inputs)
+                        dnn_output = model(dnn_inputs, dnn_target)
                         target_stack[phase].extend(np.array(dnn_target.cpu()))
                         output_stack[phase].extend(
                             np.array(dnn_output.cpu().T[0]))
@@ -370,7 +381,7 @@ for invasive in [False, True]:
 
                     dnn_inputs, dnn_target = dnn_inputs.to(
                         device), dnn_target.to(device)
-                    dnn_output = model(dnn_inputs)
+                    dnn_output = model(dnn_inputs, dnn_target)
 
                     y_scores.extend(np.array(dnn_output.cpu().T[0]))
             y_true = y_true[:len(y_scores)]
@@ -406,7 +417,7 @@ for invasive in [False, True]:
 
                     dnn_inputs, dnn_target = dnn_inputs.to(
                         device), dnn_target.to(device)
-                    dnn_output = model(dnn_inputs)
+                    dnn_output = model(dnn_inputs, dnn_target)
 
                     y_pred.extend(np.array(dnn_output.cpu().T[0]))
             y_true = y_true[:len(y_pred)]

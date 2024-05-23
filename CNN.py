@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 import numpy as np
 import pandas as pd
@@ -9,7 +8,7 @@ import pickle
 import os
 import warnings
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import confusion_matrix, accuracy_score, roc_auc_score, roc_curve, auc
+from sklearn.metrics import confusion_matrix, accuracy_score, roc_auc_score, roc_curve, auc, mean_absolute_error
 from sklearn.linear_model import LogisticRegression
 from random import randint
 import math
@@ -17,11 +16,11 @@ import math
 warnings.filterwarnings("ignore")
 
 colors = ['blue', 'cyan', 'red', 'orange']
-lr = 5e-6
+lr = 5e-4
 task = 'classification'
-pred_lag = 300
+pred_lag = 1200
 batch_size = 256
-max_epoch = 20
+max_epoch = 30
 
 num_workers = 2
 
@@ -173,7 +172,7 @@ class Net(nn.Module):
         return out
 
 
-processed_dir = './processed/'
+processed_dir = './processed2/'
 file_list = np.char.split(np.array(os.listdir(processed_dir)), '.')
 case_list = []
 for caseid in file_list:
@@ -394,6 +393,21 @@ for invasive in [False, True]:
             roc_auc = auc(fpr, tpr)
             plt.plot(fpr, tpr, color=colors[c],
                      label='AUC: {:.3f}'.format(roc_auc))
+            
+            y_pred = [1 if score >= 0.5 else 0 for score in y_scores]
+            cm = confusion_matrix(y_true, y_pred)
+            TN, FP, FN, TP = cm.ravel()
+            total_samples = TN + FP + FN + TP
+            accuracy = accuracy_score(y_true, y_pred)
+            sensitivity = TP / (TP + FN)
+            specificity = TN / (TN + FP)
+            ppv = TP / (TP + FP)
+            npv = TN / (TN + FN)
+            print("Accuracy:", accuracy)
+            print("Sensitivity:", sensitivity)
+            print("Specificity:", specificity)
+            print("Positive Predictive Value (PPV):", ppv)
+            print("Negative Predictive Value (NPV):", npv)
         else:
             y_true = np.array(ext['test']['map'])
             y_pred = []
@@ -412,13 +426,21 @@ for invasive in [False, True]:
                     y_pred.extend(np.array(dnn_output.cpu().T[0]))
             y_true = y_true[:len(y_pred)]
             errors = y_true - y_pred
-            abs_errors = abs(y_true - y_pred)
-            mae = np.mean(abs_errors)
-            print('mae:', mae)
             ax.boxplot(errors, positions=[c], patch_artist=True, showfliers=False,
                        boxprops=dict(facecolor='white', edgecolor='black'),
                        widths=0.5,
                        medianprops=dict(color=colors[c]))
+            
+            mae = mean_absolute_error(y_true, y_pred)
+            print("Mean Absolute Error (MAE):", mae)
+
+            values = abs(y_true - y_pred)
+            q1 = np.percentile(values, 25)
+            q3 = np.percentile(values, 75)
+            iqr = q3 - q1
+            iqm_values = [value for value in values if q1 <= value <= q3]
+            iqm = np.mean(iqm_values)
+            print("Interquartile Mean (IQM):", iqm)
         c += 1
 
 if task == "classification":
