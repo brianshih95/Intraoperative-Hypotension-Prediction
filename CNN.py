@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -8,10 +7,8 @@ import pickle
 import os
 import warnings
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import confusion_matrix, accuracy_score, roc_auc_score, roc_curve, auc, mean_absolute_error
+from sklearn.metrics import confusion_matrix, accuracy_score, roc_auc_score, roc_curve, auc, mean_absolute_error, precision_recall_curve
 from sklearn.linear_model import LogisticRegression
-from random import randint
-import math
 
 warnings.filterwarnings("ignore")
 
@@ -172,6 +169,19 @@ class Net(nn.Module):
         return out
 
 
+def find_best_threshold(y_true, y_scores):
+    precisions, recalls, thresholds = precision_recall_curve(y_true, y_scores)
+    f1_scores = 2 * (precisions * recalls) / (precisions + recalls)
+    f1_scores = f1_scores[:-1]
+    f1_scores = np.nan_to_num(f1_scores, nan=0.0)
+    best_threshold_index = np.argmax(f1_scores)
+    best_threshold = thresholds[best_threshold_index]
+    best_f1_score = f1_scores[best_threshold_index]
+    print("precisions:", precisions[best_threshold_index])
+    print("recall:", recalls[best_threshold_index])
+    return best_threshold, best_f1_score
+
+
 processed_dir = './processed2/'
 file_list = np.char.split(np.array(os.listdir(processed_dir)), '.')
 case_list = []
@@ -229,7 +239,7 @@ for phase in ['train', 'valid', 'test']:
         cases[phase])].reset_index(drop=True)
     print('- N of {} records: {}'.format(phase, len(split_records[phase])))
 
-c = 0
+task_idx = 0
 fig, ax = plt.subplots()
 
 for invasive in [False, True]:
@@ -389,13 +399,19 @@ for invasive in [False, True]:
 
                     y_scores.extend(np.array(dnn_output.cpu().T[0]))
             y_true = y_true[:len(y_scores)]
+            best_threshold, best_f1_score = find_best_threshold(
+                y_true, y_scores)
+            print(
+                f"Best Threshold: {best_threshold:.4f}, Best F1 Score: {best_f1_score:.4f}")
+
             fpr, tpr, thresholds = roc_curve(y_true, y_scores)
             roc_auc = auc(fpr, tpr)
-            plt.plot(fpr, tpr, color=colors[c],
+            plt.plot(fpr, tpr, color=colors[task_idx],
                      label='AUC: {:.3f}'.format(roc_auc))
-            
-            y_pred = [1 if score >= 0.5 else 0 for score in y_scores]
+
+            y_pred = [1 if score >= best_threshold else 0 for score in y_scores]
             cm = confusion_matrix(y_true, y_pred)
+
             TN, FP, FN, TP = cm.ravel()
             total_samples = TN + FP + FN + TP
             accuracy = accuracy_score(y_true, y_pred)
@@ -403,6 +419,7 @@ for invasive in [False, True]:
             specificity = TN / (TN + FP)
             ppv = TP / (TP + FP)
             npv = TN / (TN + FN)
+
             print("Accuracy:", accuracy)
             print("Sensitivity:", sensitivity)
             print("Specificity:", specificity)
@@ -426,11 +443,11 @@ for invasive in [False, True]:
                     y_pred.extend(np.array(dnn_output.cpu().T[0]))
             y_true = y_true[:len(y_pred)]
             errors = y_true - y_pred
-            ax.boxplot(errors, positions=[c], patch_artist=True, showfliers=False,
+            ax.boxplot(errors, positions=[task_idx], patch_artist=True, showfliers=False,
                        boxprops=dict(facecolor='white', edgecolor='black'),
                        widths=0.5,
-                       medianprops=dict(color=colors[c]))
-            
+                       medianprops=dict(color=colors[task_idx]))
+
             mae = mean_absolute_error(y_true, y_pred)
             print("Mean Absolute Error (MAE):", mae)
 
@@ -441,7 +458,7 @@ for invasive in [False, True]:
             iqm_values = [value for value in values if q1 <= value <= q3]
             iqm = np.mean(iqm_values)
             print("Interquartile Mean (IQM):", iqm)
-        c += 1
+        task_idx += 1
 
 if task == "classification":
     plt.plot([0, 1], [0, 1], color='gray', linestyle='dotted')

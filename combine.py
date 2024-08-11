@@ -12,6 +12,7 @@ from sklearn.metrics import confusion_matrix, accuracy_score, roc_auc_score, roc
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 import torch.optim.lr_scheduler as lr_scheduler
+import wandb
 
 
 warnings.filterwarnings("ignore")
@@ -24,6 +25,14 @@ task = 'classification'
 pred_lag = 1200
 batch_size = 128
 max_epoch = 15
+
+wandb.init(
+    project="hypotension-prediction-final",
+    name="cnn-transformer-training-final",
+    config={
+        "batch_size": batch_size,
+    }
+)
 
 num_workers = 2
 
@@ -415,6 +424,11 @@ for invasive in [False, True]:
                    current_loss['train'],
                    current_loss['valid'], current_auc['valid'],
                    current_loss['test'], current_auc['test'], best))
+            wandb.log({
+                filename + "_transformer_train_loss": current_loss['train'],
+                filename + "_transformer_val_loss": current_loss['valid'],
+                filename + "_transformer_test_loss": current_loss['test']
+            })
 
         best_model_path = f'{filename}_epoch_best.pt'
         model.load_state_dict(torch.load(pt_dir + best_model_path))
@@ -451,6 +465,357 @@ for invasive in [False, True]:
             y_pred = [1 if score >= best_threshold else 0 for score in y_scores]
 
             cm = confusion_matrix(y_true, y_pred)
+            TN, FP, FN, TP = cm.ravel()
+            total_samples = TN + FP + FN + TP
+            accuracy = accuracy_score(y_true, y_pred)
+            sensitivity = TP / (TP + FN)
+            specificity = TN / (TN + FP)
+            ppv = TP / (TP + FP)
+            npv = TN / (TN + FN)
+
+            print("Accuracy:", accuracy)
+            print("Sensitivity:", sensitivity)
+            print("Specificity:", specificity)
+            print("Positive Predictive Value (PPV):", ppv)
+            print("Negative Predictive Value (NPV):", npv)
+        else:
+            y_true = np.array(ext['test']['map'])
+            y_pred = []
+
+            with torch.no_grad():
+                for dnn_inputs, dnn_target in loader['test']:
+
+                    # bug
+                    for i in range(len(dnn_inputs)):
+                      dnn_inputs[i] = torch.nan_to_num(dnn_inputs[i], nan=0.0)
+
+                    dnn_inputs, dnn_target = dnn_inputs.to(
+                        device), dnn_target.to(device)
+                    dnn_output = model(dnn_inputs)
+
+                    y_pred.extend(np.array(dnn_output.cpu().T[0]))
+            y_true = y_true[:len(y_pred)]
+            errors = y_true - y_pred
+            ax.boxplot(errors, positions=[task_idx], patch_artist=True, showfliers=False,
+                       boxprops=dict(facecolor='white', edgecolor='black'),
+                       widths=0.5,
+                       medianprops=dict(color=colors[task_idx]))
+
+            mae = mean_absolute_error(y_true, y_pred)
+            print("Mean Absolute Error (MAE):", mae)
+
+            values = abs(y_true - y_pred)
+            q1 = np.percentile(values, 25)
+            q3 = np.percentile(values, 75)
+            iqr = q3 - q1
+            iqm_values = [value for value in values if q1 <= value <= q3]
+            iqm = np.mean(iqm_values)
+            print("Interquartile Mean (IQM):", iqm)
+        task_idx += 1
+
+if task == "classification":
+    plt.plot([0, 1], [0, 1], color='gray', linestyle='dotted')
+    plt.xlabel('fpr')
+    plt.ylabel('tpr')
+    plt.title(f'{label_pred_lag} prediction')
+    plt.legend(loc='lower right')
+    plt.axis('scaled')
+else:
+    ax.set_xticks([])
+    ax.axhline(y=0, color='gray', linestyle='dotted')
+    plt.ylabel('Error in predicted value (mm Hg)')
+    plt.title(f'{label_pred_lag} arterial pressure prediction')
+
+plt.gca().spines['right'].set_visible(False)
+plt.gca().spines['top'].set_visible(False)
+plt.savefig(f'curve/{task} {label_pred_lag} prediction.png')
+plt.show()
+
+
+lr = 5e-4
+batch_size = 128
+max_epoch = 15
+
+
+class Net(nn.Module):
+    def __init__(self, task, invasive, multi):
+
+        self.task, self.invasive, self.multi = task, invasive, multi
+        super(Net, self).__init__()
+
+        if self.task == 'classification':
+            self.dr = dr_classification
+            self.final = 2
+        else:
+            self.dr = dr_regression
+            self.final = 1
+
+        if self.multi == True:
+            self.inc = 4 if self.invasive == True else 3
+        else:
+            self.inc = 1
+
+        self.conv1 = nn.Sequential(
+            nn.Conv1d(in_channels=self.inc, out_channels=64,
+                      kernel_size=10, stride=1, padding=0),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.MaxPool1d(2, stride=2),
+            nn.Dropout(self.dr)
+        )
+
+        self.conv2 = nn.Sequential(
+            nn.Conv1d(64, 128, kernel_size=16, stride=1, padding=1),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.MaxPool1d(2, stride=2),
+            nn.Dropout(self.dr)
+        )
+
+        self.conv3 = nn.Sequential(
+            nn.Conv1d(128, 128, kernel_size=16, stride=1, padding=1),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.MaxPool1d(2, stride=2),
+            nn.Dropout(self.dr)
+        )
+
+        self.conv4 = nn.Sequential(
+            nn.Conv1d(128, 128, kernel_size=16, stride=1, padding=1),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.MaxPool1d(2, stride=2),
+            nn.Dropout(self.dr)
+        )
+
+        self.conv5 = nn.Sequential(
+            nn.Conv1d(128, 64, kernel_size=16, stride=1, padding=1),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.MaxPool1d(2, stride=2),
+            nn.Dropout(self.dr)
+        )
+
+        self.conv6 = nn.Sequential(
+            nn.Conv1d(64, 32, kernel_size=16, stride=1, padding=1),
+            nn.BatchNorm1d(32),
+            nn.ReLU(),
+            nn.MaxPool1d(2, stride=2),
+            nn.Dropout(self.dr)
+        )
+
+        self.conv7 = nn.Sequential(
+            nn.Conv1d(32, 32, kernel_size=16, stride=1, padding=1),
+            nn.BatchNorm1d(32),
+            nn.ReLU(),
+            nn.MaxPool1d(2, stride=2),
+            nn.Dropout(self.dr)
+        )
+
+        self.fc = nn.Sequential(
+            nn.Linear(320, self.final),
+            nn.Dropout(self.dr)
+        )
+
+        self.activation = nn.Sigmoid()
+
+    def forward(self, x):
+
+        x = x.view(x.shape[0], self.inc, -1)
+        out = self.conv1(x)
+        out = self.conv2(out)
+        out = self.conv3(out)
+        out = self.conv4(out)
+        out = self.conv5(out)
+        out = self.conv6(out)
+        out = self.conv7(out)
+
+        out = out.view(x.shape[0], out.size(1) * out.size(2))
+
+        out = self.fc(out)
+        if self.task == 'classification':
+            out = self.activation(out)
+        return out
+
+
+task_idx = 0
+fig, ax = plt.subplots()
+
+for invasive in [False, True]:
+    for multi in [False, True]:
+        print('\n\nInvasive: {}\nMulti: {}\nPred lag: {}\n'.format(
+            invasive, multi, pred_lag))
+        ext = {}
+        for phase in ['train', 'valid', 'test']:
+            ext[phase] = {}
+            for x in ['abp', 'ecg', 'ple', 'co2', 'hypo', 'map']:
+                ext[phase][x] = split_records[phase][x]
+
+        dataset, loader = {}, {}
+        epoch_loss, epoch_auc = {}, {}
+
+        for phase in ['train', 'valid', 'test']:
+            dataset[phase] = dnn_dataset(ext[phase]['abp'],
+                                         ext[phase]['ecg'],
+                                         ext[phase]['ple'],
+                                         ext[phase]['co2'],
+                                         ext[phase][task_target],
+                                         invasive=invasive, multi=multi)
+            loader[phase] = torch.utils.data.DataLoader(dataset[phase],
+                                                        batch_size=batch_size,
+                                                        num_workers=num_workers,
+                                                        shuffle=True if phase == 'train' else False,
+                                                        drop_last=True)
+            epoch_loss[phase], epoch_auc[phase] = [], []
+
+        model = Net(task=task, invasive=invasive, multi=multi)
+        model = model.to(device)
+
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        n_epochs = max_epoch
+
+        best_loss, best_auc = 99999.99999, 0.0
+
+        for epoch in range(n_epochs):
+
+            target_stack, output_stack = {}, {}
+            current_loss, current_auc = {}, {}
+            for phase in ['train', 'valid', 'test']:
+                target_stack[phase], output_stack[phase] = [], []
+                current_loss[phase], current_auc[phase] = 0.0, 0.0
+
+            model.train()
+            for dnn_inputs, dnn_target in loader['train']:
+
+                # bug
+                for i in range(len(dnn_inputs)):
+                    dnn_inputs[i] = torch.nan_to_num(dnn_inputs[i], nan=0.0)
+
+                dnn_inputs, dnn_target = dnn_inputs.to(
+                    device), dnn_target.to(device)
+                optimizer.zero_grad()
+                dnn_output = model(dnn_inputs)
+                loss = criterion(dnn_output[:, 0], dnn_target)
+                current_loss['train'] += loss.item()*dnn_inputs.size(0)
+                loss.backward()
+                optimizer.step()
+
+            current_loss['train'] = current_loss['train'] / \
+                len(loader['train'].dataset)
+            epoch_loss['train'].append(current_loss['train'])
+
+            for phase in ['valid', 'test']:
+                model.eval()
+                with torch.no_grad():
+                    for dnn_inputs, dnn_target in loader[phase]:
+
+                        # bug
+                        for i in range(len(dnn_inputs)):
+                          dnn_inputs[i] = torch.nan_to_num(
+                              dnn_inputs[i], nan=0.0)
+
+                        dnn_inputs, dnn_target = dnn_inputs.to(
+                            device), dnn_target.to(device)
+                        dnn_output = model(dnn_inputs)
+                        target_stack[phase].extend(np.array(dnn_target.cpu()))
+                        output_stack[phase].extend(
+                            np.array(dnn_output.cpu().T[0]))
+
+                        loss = criterion(dnn_output[:, 0], dnn_target)
+                        current_loss[phase] += loss.item()*dnn_inputs.size(0)
+
+                    current_loss[phase] = current_loss[phase] / \
+                        len(loader[phase].dataset)
+                    epoch_loss[phase].append(current_loss[phase])
+
+            if task == 'classification':
+                log_label = {}
+                for phase in ['valid', 'test']:
+                    current_auc[phase] = roc_auc_score(
+                        target_stack[phase], output_stack[phase])
+                    epoch_auc[phase].append(current_auc[phase])
+            else:
+                reg_output, reg_target, reg_label = {}, {}, {}
+                for phase in ['valid', 'test']:
+                    reg_output[phase] = np.array(
+                        output_stack[phase]).reshape(-1, 1)
+                    reg_target[phase] = np.array(
+                        target_stack[phase]).reshape(-1, 1)
+                    reg_label[phase] = np.where(reg_target[phase] < 65, 1, 0)
+                    method = LogisticRegression(solver='liblinear')
+                    method.fit(reg_output[phase], reg_label[phase])
+                    current_auc[phase] = roc_auc_score(
+                        reg_label[phase], method.predict_proba(reg_output[phase]).T[1])
+                    epoch_auc[phase].append(current_auc[phase])
+
+            label_invasive = 'invasive' if invasive == True else 'noninvasive'
+            label_multi = 'multi' if multi == True else 'mono'
+            label_pred_lag = str(int(pred_lag / 60)) + 'min'
+
+            filename = task+'_'+label_invasive+'_'+label_multi+'_'+label_pred_lag
+
+            best = ''
+            if task == 'regression' and abs(current_loss['valid']) < abs(best_loss):
+                best = '< ! >'
+                last_saved_epoch = epoch
+                best_loss = abs(current_loss['valid'])
+                torch.save(model.state_dict(), pt_dir +
+                           filename+'_epoch_best.pt')
+            elif task == 'classification' and abs(current_auc['valid']) > abs(best_auc):
+                best = '< ! >'
+                last_saved_epoch = epoch
+                best_auc = abs(current_auc['valid'])
+                torch.save(model.state_dict(), pt_dir +
+                           filename+'_epoch_best.pt')
+
+            # torch.save(model.state_dict(), pt_dir+filename +
+            #            '_epoch_{0:03d}.pt'.format(epoch+1))
+
+            print('Epoch [{:3d}] Train loss: {:.4f} / Valid loss: {:.4f} (AUC: {:.4f}) / Test loss: {:.4f} (AUC: {:.4f}) {}'.format
+                  (epoch+1,
+                   current_loss['train'],
+                   current_loss['valid'], current_auc['valid'],
+                   current_loss['test'], current_auc['test'], best))
+            wandb.log({
+                filename + "_cnn_train_loss": current_loss['train'],
+                filename + "_cnn_val_loss": current_loss['valid'],
+                filename + "_cnn_test_loss": current_loss['test']
+            })
+
+        best_model_path = f'{filename}_epoch_best.pt'
+        model.load_state_dict(torch.load(pt_dir + best_model_path))
+        model.eval()
+
+        if task == "classification":
+            y_true = np.array(ext['test']['hypo'])
+            y_scores = []
+
+            with torch.no_grad():
+                for dnn_inputs, dnn_target in loader['test']:
+
+                    # bug
+                    for i in range(len(dnn_inputs)):
+                      dnn_inputs[i] = torch.nan_to_num(dnn_inputs[i], nan=0.0)
+
+                    dnn_inputs, dnn_target = dnn_inputs.to(
+                        device), dnn_target.to(device)
+                    dnn_output = model(dnn_inputs)
+
+                    y_scores.extend(np.array(dnn_output.cpu().T[0]))
+            y_true = y_true[:len(y_scores)]
+            best_threshold, best_f1_score = find_best_threshold(
+                y_true, y_scores)
+            print(
+                f"Best Threshold: {best_threshold:.4f}, Best F1 Score: {best_f1_score:.4f}")
+
+            fpr, tpr, thresholds = roc_curve(y_true, y_scores)
+            roc_auc = auc(fpr, tpr)
+            plt.plot(fpr, tpr, color=colors[task_idx],
+                     label='AUC: {:.3f}'.format(roc_auc))
+
+            y_pred = [1 if score >= best_threshold else 0 for score in y_scores]
+            cm = confusion_matrix(y_true, y_pred)
+
             TN, FP, FN, TP = cm.ravel()
             total_samples = TN + FP + FN + TP
             accuracy = accuracy_score(y_true, y_pred)
