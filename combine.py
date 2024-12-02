@@ -193,7 +193,7 @@ def find_best_threshold(y_true, y_scores):
     return best_threshold, best_f1_score
 
 
-processed_dir = './processed2/'
+processed_dir = './processed_long/'
 file_list = np.char.split(np.array(os.listdir(processed_dir)), '.')
 case_list = []
 for caseid in file_list:
