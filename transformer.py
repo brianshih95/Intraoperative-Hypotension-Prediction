@@ -1,3 +1,4 @@
+# Transformer.py
 import torch
 import torch.nn as nn
 import numpy as np
@@ -12,27 +13,33 @@ from sklearn.metrics import confusion_matrix, accuracy_score, roc_auc_score, roc
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 import torch.optim.lr_scheduler as lr_scheduler
+import wandb
 
 
 warnings.filterwarnings("ignore")
 
 colors = ['blue', 'cyan', 'red', 'orange']
-lr = 2e-4
-weight_decay = 2e-6
-factor = 0.3
-task = 'classification'
+lr = 5e-5
+weight_decay = 5e-7
+factor = 0.5
+task = 'regression'
 pred_lag = 1200
 batch_size = 128
-max_epoch = 15
+max_epoch = 20
+
+wandb.init(
+    project="hypotension-prediction",
+    name="final",
+    config={
+        "batch_size": batch_size,
+    }
+)
 
 num_workers = 2
 
 train_ratio = 0.6
 valid_ratio = 0.1
 test_ratio = 0.3
-
-dr_classification = 0.3
-dr_regression = 0.0
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -102,10 +109,8 @@ class TransformerModel(nn.Module):
 
         if self.task == 'classification':
             self.final = 2
-            self.dr = dr_classification
         else:
             self.final = 1
-            self.dr = dr_regression
 
         if self.multi:
             self.inc = 4 if invasive else 3
@@ -118,38 +123,32 @@ class TransformerModel(nn.Module):
         self.block1 = nn.Sequential(
             nn.Linear(self.d_model, 32),
             nn.ReLU(),
-            nn.Dropout(self.dr)
         )
         self.block2 = nn.Sequential(
             nn.Linear(32, 64),
             nn.ReLU(),
-            nn.Dropout(self.dr)
         )
         self.block3 = nn.Sequential(
             nn.Linear(64, 128),
             nn.ReLU(),
-            nn.Dropout(self.dr)
         )
         self.block4 = nn.Sequential(
             nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Dropout(self.dr)
         )
         self.block5 = nn.Sequential(
             nn.Linear(64, 32),
             nn.ReLU(),
-            nn.Dropout(self.dr)
         )
         self.block6 = nn.Sequential(
             nn.Linear(32, 8),
             nn.ReLU(),
-            nn.Dropout(self.dr)
         )
 
         embedding_dim = hidden_dim
         self.pos_encoder = PositionalEncoding(embedding_dim)
         self.encoder_layer = nn.TransformerEncoderLayer(
-            d_model=embedding_dim, nhead=num_heads, dim_feedforward=dim_feedforward, batch_first=batch_first)
+            d_model=embedding_dim, nhead=num_heads, dim_feedforward=dim_feedforward, batch_first=batch_first, dropout=0.3)
         self.transformer_encoder = nn.TransformerEncoder(
             self.encoder_layer, num_layers=num_layers)
 
@@ -307,7 +306,7 @@ for invasive in [False, True]:
             model.parameters(), lr=lr, weight_decay=weight_decay)
 
         scheduler = lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='min', factor=factor, patience=3, verbose=True)
+            optimizer, mode='min', factor=factor, patience=2, verbose=True)
 
         n_epochs = max_epoch
 
@@ -415,6 +414,11 @@ for invasive in [False, True]:
                    current_loss['train'],
                    current_loss['valid'], current_auc['valid'],
                    current_loss['test'], current_auc['test'], best))
+            wandb.log({
+                filename + "_transformer_train_loss": current_loss['train'],
+                filename + "_transformer_val_loss": current_loss['valid'],
+                filename + "_transformer_test_loss": current_loss['test']
+            })
 
         best_model_path = f'{filename}_epoch_best.pt'
         model.load_state_dict(torch.load(pt_dir + best_model_path))
@@ -460,10 +464,10 @@ for invasive in [False, True]:
             npv = TN / (TN + FN)
 
             print("Accuracy:", accuracy)
-            print("Sensitivity:", sensitivity)
-            print("Specificity:", specificity)
-            print("Positive Predictive Value (PPV):", ppv)
-            print("Negative Predictive Value (NPV):", npv)
+            # print("Sensitivity:", sensitivity)
+            # print("Specificity:", specificity)
+            # print("Positive Predictive Value (PPV):", ppv)
+            # print("Negative Predictive Value (NPV):", npv)
         else:
             y_true = np.array(ext['test']['map'])
             y_pred = []
@@ -514,5 +518,5 @@ else:
 
 plt.gca().spines['right'].set_visible(False)
 plt.gca().spines['top'].set_visible(False)
-plt.savefig(f'curve/{task} {label_pred_lag} prediction.png')
+# plt.savefig(f'curve/{task} {label_pred_lag} prediction.png')
 plt.show()
