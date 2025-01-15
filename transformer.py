@@ -1,7 +1,7 @@
-import torch
-import torch.nn as nn
 import numpy as np
 import pandas as pd
+import torch
+import torch.nn as nn
 import matplotlib.pyplot as plt
 import pickle
 import os
@@ -22,16 +22,13 @@ lr = 5e-5
 weight_decay = 5e-7
 factor = 0.5
 task = 'regression'
-pred_lag = 1200
+pred_lag = 300
 batch_size = 128
 max_epoch = 20
 
 wandb.init(
     project="hypotension-prediction",
     name="final",
-    config={
-        "batch_size": batch_size,
-    }
 )
 
 num_workers = 2
@@ -193,7 +190,7 @@ def find_best_threshold(y_true, y_scores):
     return best_threshold, best_f1_score
 
 
-processed_dir = './processed_long/'
+processed_dir = './processed_short/'
 file_list = np.char.split(np.array(os.listdir(processed_dir)), '.')
 case_list = []
 for caseid in file_list:
@@ -405,9 +402,6 @@ for invasive in [False, True]:
                 torch.save(model.state_dict(), pt_dir +
                            filename+'_epoch_best.pt')
 
-            # torch.save(model.state_dict(), pt_dir+filename +
-            #            '_epoch_{0:03d}.pt'.format(epoch+1))
-
             print('Epoch [{:3d}] Train loss: {:.4f} / Valid loss: {:.4f} (AUC: {:.4f}) / Test loss: {:.4f} (AUC: {:.4f}) {}'.format
                   (epoch+1,
                    current_loss['train'],
@@ -463,10 +457,10 @@ for invasive in [False, True]:
             npv = TN / (TN + FN)
 
             print("Accuracy:", accuracy)
-            # print("Sensitivity:", sensitivity)
-            # print("Specificity:", specificity)
-            # print("Positive Predictive Value (PPV):", ppv)
-            # print("Negative Predictive Value (NPV):", npv)
+            print("Sensitivity:", sensitivity)
+            print("Specificity:", specificity)
+            print("Positive Predictive Value (PPV):", ppv)
+            print("Negative Predictive Value (NPV):", npv)
         else:
             y_true = np.array(ext['test']['map'])
             y_pred = []
@@ -517,5 +511,5 @@ else:
 
 plt.gca().spines['right'].set_visible(False)
 plt.gca().spines['top'].set_visible(False)
-# plt.savefig(f'curve/{task} {label_pred_lag} prediction.png')
+plt.savefig(f'curve/{task} {label_pred_lag} prediction.png')
 plt.show()
